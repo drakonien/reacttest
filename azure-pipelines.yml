@@ -4,29 +4,74 @@
 # https://docs.microsoft.com/azure/devops/pipelines/languages/javascript
 name: $(Build.DefinitionName)-$(SourceBranchName)-$(Date:yyyyMMdd).$(Rev:rr)
 
+variables:
+
+  # Azure Resource Manager connection created during pipeline creation
+  azureSubscription: '{{ azureRmConnection.Id }}'
+
+  # Web app name
+  webAppName: '{{ webAppName }}'
+
 trigger:
 - main
 
 pool:
   vmImage: ubuntu-latest
 
-steps:
-- task: NodeTool@0
-  inputs:
-    versionSpec: '18.x'
-  displayName: 'Install Node.js'
+stages:
+- stage: Build
+  displayName: Build
+  jobs:
+    - job: Build
+      steps:
+        - task: NodeTool@0
+          inputs:
+            versionSpec: '18.x'
+          displayName: 'Install Node.js'
 
-- script: |
-    npm install
-    npm run build
-  displayName: 'npm install and build'
+        - script: |
+            npm install
+            npm run build
+          displayName: 'npm install and build'
 
-- task: CopyFiles@2
-  inputs:
-    contents: 'build/**'
-    targetFolder: $(Build.ArtifactStagingDirectory)
+        - task: CopyFiles@2
+          displayName: Copy files
+          inputs:
+            contents: 'build/**'
+            targetFolder: $(Build.ArtifactStagingDirectory)
 
-- task: PublishBuildArtifacts@1
-  inputs:
-    pathToPublish: $(Build.ArtifactStagingDirectory)
-    artifactName: reacttest_artifact
+        - task: PublishBuildArtifacts@1
+          displayName: Publish build artifact
+          inputs:
+            pathToPublish: $(Build.ArtifactStagingDirectory)
+            artifactName: reacttest_artifact
+
+        - task: ArchiveFiles@2
+          displayName: 'Archive files'
+          inputs:
+            rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/build'
+            includeRootFolder: false
+            archiveType: zip
+            archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+            replaceExistingArchive: true
+
+        - publish: $(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip
+          artifact: drop
+
+- stage: Deploy
+  displayName: Deploy to Azure
+  dependsOn: Build
+  condition: succeeded()
+  jobs:
+    - job: Deploy
+      steps:
+        - task: AzureRmWebAppDeployment@4
+          displayName: 'Azure App Service Deploy: {{ webAppName }}'
+          inputs:
+            azureSubscription: $(azureSubscription)
+            appType: webAppLinux
+            WebAppName: $(webAppName)
+            packageForLinux: '$(Build.ArtifactStagingDirectory)/$(Build.BuildId).zip'
+            RuntimeStack: 'NODE|10.10'
+            StartupCommand: 'npm run start'
+
